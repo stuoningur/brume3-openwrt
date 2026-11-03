@@ -1,60 +1,61 @@
-# Brume 3 (GL-MT5000) – eigenes OpenWrt per GitHub Actions
+# Brume 3 (GL-MT5000) – OpenWrt per GitHub Actions
 
-Baut OpenWrt für den GL.iNet GL-MT5000 aus GL.iNets Branch `mt5000`
-(OpenWrt main, Kernel 6.18, Switch-Treiber als DSA) – also derselben Basis wie
-der PR #24237 – plus eigener Paketliste und einem Fix für „Einstellungen
-behalten“ beim Sysupgrade.
+Baut OpenWrt für den GL.iNet GL-MT5000 so nah wie möglich am Standard-Image
+eines offiziell unterstützten Geräts: keine eigenen Dateien, keine eigenen
+Patches, Paketauswahl = Gerätestandard + LuCI.
 
-## Einmalig einrichten
+## Quelle
 
-1. Auf github.com ein **neues, öffentliches Repository** anlegen
-   (z. B. `brume3-openwrt`). Öffentlich = Actions-Minuten kostenlos.
-2. Den Inhalt dieses Ordners hochladen („Add file → Upload files“),
-   inklusive des versteckten Ordners `.github/workflows/`.
-   *Tipp:* Der Ordner `.github` wird beim Hochladen per Drag-and-drop manchmal
-   übersprungen – dann die Datei über „Add file → Create new file“ mit dem
-   Pfad `.github/workflows/build.yml` anlegen und den Inhalt einfügen.
-3. Unter **Settings → Actions → General** prüfen, dass Actions erlaubt sind
-   und bei „Workflow permissions“ **Read and write** gesetzt ist
-   (nötig für das automatische Release).
+Der Brume 3 wird von keinem OpenWrt-Release unterstützt. Der Geräte-Support
+existiert nur als PR [#24237](https://github.com/openwrt/openwrt/pull/24237)
+gegen OpenWrt `main` (Kernel 6.18); das aktuelle Stable-Release 25.12.x nutzt
+Kernel 6.12 und enthält ihn nicht.
+
+Gebaut wird deshalb ein festgenagelter, geprüfter Stand:
+
+| Teil | Stand |
+|---|---|
+| Quellbaum | `GLiNet-Tech/openwrt` @ `89a10ec` = OpenWrt `main` `19a15f9` (22.10.2026) + genau der PR-Commit |
+| Feed packages | `c79462b` |
+| Feed luci | `580b6b1` |
+| Feed routing | `4b9891b` |
+
+Das ist ein Snapshot von `main`, kein Stable-Release. Sobald der Brume 3 in
+einem OpenWrt-Release enthalten ist, besser das offizielle Image nehmen.
+
+Neuen Stand bauen: `SOURCE_REF` bzw. die Feed-Commits in
+`.github/workflows/build.yml` anpassen – vorher den Diff gegen OpenWrt `main`
+prüfen.
 
 ## Bauen
 
-**Actions → „Brume 3 OpenWrt bauen“ → Run workflow.**
+**Actions → „Brume 3 OpenWrt bauen“ → Run workflow** (oder Push auf `main`).
+Unter **Settings → Actions → General → Workflow permissions** muss
+**Read and write** gesetzt sein (für Release und Branch `build-logs`).
 
-- `source_ref`: Standard `mt5000` (aktueller GL.iNet-Stand). Ein Commit-Hash
-  baut reproduzierbar einen bestimmten Stand.
-- `all_kmods`: an = alle Kernelmodule werden mitgebaut und liegen im Release
-  als `kmods-und-target-pakete.tar.gz` (für spätere Nachinstallation passend
-  zum Kernel). Dauert länger.
+- `source_ref`: Commit im GL.iNet-Repo, Standard ist der geprüfte Stand.
+- `all_kmods`: alle Kernelmodule mitbauen; sie liegen im Release als
+  `kmods-und-target-pakete.tar.gz`. Dauert länger.
 
-Laufzeit: grob 2–4 Stunden beim ersten Mal, danach dank Cache schneller.
 Ergebnis: ein Pre-Release unter **Releases** mit
-`…gl-mt5000-squashfs-sysupgrade.bin`, Manifest und Prüfsummen.
-
-## Pakete ändern
-
-`config/brume3.config` bearbeiten (eine Zeile `CONFIG_PACKAGE_<name>=y` pro
-Paket) und neu bauen.
+`…gl-mt5000-squashfs-sysupgrade.bin`, `…factory.bin`, Manifest und
+Prüfsummen. Die Prüfsummen stammen aus demselben Build und erkennen nur
+Übertragungsfehler, keine Manipulation.
 
 ## Flashen
 
-1. Backup ziehen: LuCI → System → Sicherung → „Sicherung erstellen“
-   (oder `sysupgrade -b /tmp/backup.tar.gz`) und auf den PC laden.
-2. Das bisherige Image (dsouza 20260912) griffbereit halten.
-3. Erstes Mal **ohne** Einstellungen flashen (`sysupgrade -n` bzw. Haken
-   „Einstellungen beibehalten“ raus), dann das Backup in LuCI einspielen.
-   Ab diesem Image funktioniert „Einstellungen beibehalten“ dank Fix normal.
-4. Nicht vor einem Arbeitstag.
-
-**Notfall:** Reset-Taste beim Einschalten ~5 s halten → U-Boot-Failsafe unter
-http://192.168.1.1 (PC direkt an einen LAN-Port, feste IP 192.168.1.2) →
-Image hochladen.
+- Von der GL.iNet-Stock-Firmware: `sysupgrade.bin` über die Upgrade-Seite der
+  Stock-Oberfläche einspielen, **ohne** Einstellungen zu behalten
+  (bzw. `sysupgrade -n`).
+- Von einem OpenWrt-Image: normales Sysupgrade.
+- **Notfall:** Reset-Taste beim Einschalten ~5 s halten → U-Boot-Failsafe unter
+  http://192.168.1.1 (PC direkt an einen LAN-Port, feste IP 192.168.1.2) →
+  Image hochladen.
 
 ## Nachinstallation einzelner kmods
 
-Pakete aus `kmods-und-target-pakete.tar.gz` auf den Router kopieren und mit
-`apk add --allow-untrusted /tmp/<paket>.apk` installieren (die Pakete sind mit
-einem pro Build erzeugten Schlüssel signiert, daher `--allow-untrusted`).
-Paketfeeds aus dem Internet passen nicht zum eigenen Kernel – kmods immer aus
-dem eigenen Build nehmen.
+Pakete aus `kmods-und-target-pakete.tar.gz` **desselben Builds** auf den
+Router kopieren und mit `apk add /tmp/<paket>.apk` installieren. Das Image
+enthält den öffentlichen Schlüssel seines Builds, die Signatur wird also
+normal geprüft. Paketfeeds aus dem Internet passen nicht zum eigenen Kernel –
+kmods immer aus dem eigenen Build nehmen.

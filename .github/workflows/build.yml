@@ -3,12 +3,12 @@ name: Brume 3 OpenWrt bauen
 on:
   push:
     branches: [main]
-    paths: ['config/**', 'scripts/**', 'files/**', '.github/workflows/**']
+    paths: ['config/**', '.github/workflows/**']
   workflow_dispatch:
     inputs:
       source_ref:
-        description: "Branch/Commit im GL.iNet-Repo (Standard: mt5000)"
-        default: mt5000
+        description: "Commit im GL.iNet-Repo (Standard: geprüfter Stand 89a10ec)"
+        default: 89a10ec2c943f27d52c892ccff9310f94a817379
         required: true
       all_kmods:
         description: "Alle Kernelmodule mitbauen (dauert länger, erlaubt spätere Nachinstallation)"
@@ -20,6 +20,13 @@ permissions:
 
 env:
   SOURCE_REPO: https://github.com/GLiNet-Tech/openwrt.git
+  # Geprüfter Stand: OpenWrt main 19a15f9 (22.10.2026) + PR #24237, sonst nichts
+  SOURCE_REF: ${{ inputs.source_ref || '89a10ec2c943f27d52c892ccff9310f94a817379' }}
+  ALL_KMODS: ${{ inputs.all_kmods && 'true' || (github.event_name == 'push' && 'true' || 'false') }}
+  # Feeds auf den Stand des Basis-Commits festnageln (wie bei einem Release)
+  FEED_PACKAGES: c79462b16e96340589a3d4874f2d81c2e9d69566
+  FEED_LUCI: 580b6b1d9ec3a79edb8e2a5a9c4700b9c320ff6a
+  FEED_ROUTING: 4b9891b9136259f93294a424507ed24c5e8c1cbd
   OPENWRT_PATH: /mnt/openwrt
   TZ: Europe/Berlin
 
@@ -30,6 +37,8 @@ jobs:
     steps:
       - name: Build-Repo auschecken
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Speicherplatz freigeben
         run: |
@@ -45,13 +54,21 @@ jobs:
             python3 python3-setuptools python3-dev rsync swig unzip zlib1g-dev \
             file wget libelf-dev ccache zstd
 
-      - name: Quellen klonen (GL.iNet mt5000 = OpenWrt main + PR #24237)
+      - name: Quellen klonen (festgenagelter Commit)
         run: |
           sudo mkdir -p "$OPENWRT_PATH"
           sudo chown "$USER:$USER" "$OPENWRT_PATH"
-          git clone --filter=blob:none -b mt5000 "$SOURCE_REPO" "$OPENWRT_PATH"
+          git clone --filter=blob:none --no-checkout "$SOURCE_REPO" "$OPENWRT_PATH"
           cd "$OPENWRT_PATH"
-          git checkout "${{ inputs.source_ref || 'mt5000' }}"
+          # Per SHA holen: funktioniert auch, wenn der Branch später umgeschrieben wird
+          git fetch --filter=blob:none origin "$SOURCE_REF"
+          git checkout -q --detach FETCH_HEAD
+          if echo "$SOURCE_REF" | grep -qE '^[0-9a-f]{40}$'; then
+            test "$(git rev-parse HEAD)" = "$SOURCE_REF" \
+              || { echo "FEHLER: HEAD ist nicht $SOURCE_REF"; exit 1; }
+          fi
+          grep -q 'define Device/glinet_gl-mt5000' target/linux/mediatek/image/filogic.mk \
+            || { echo "FEHLER: Geräterezept glinet_gl-mt5000 fehlt"; exit 1; }
           echo "SRC_REV=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
           git log --oneline -3
 
@@ -65,22 +82,17 @@ jobs:
           key: brume3-${{ env.SRC_REV }}-${{ hashFiles('config/brume3.config') }}
           restore-keys: brume3-
 
-      - name: Quellbaum vorbereiten (inkl. copy_config-Fix)
-        run: |
-          cd "$OPENWRT_PATH"
-          bash "$GITHUB_WORKSPACE/scripts/prepare.sh"
-          # Eigene Dateien (Skripte, uci-defaults) ins Image übernehmen
-          if [ -d "$GITHUB_WORKSPACE/files" ]; then
-            mkdir -p files && cp -a "$GITHUB_WORKSPACE/files/." files/
-            find files -type f | sed 's/^/  + /'
-          fi
-
       - name: Feeds aktualisieren
         run: |
           cd "$OPENWRT_PATH"
-          # Telefonie- und Video-Feed werden nicht gebraucht (spart Bauzeit,
-          # rtpengine-kmod baut z. B. nicht mit Kernel 6.18)
-          sed -i -E '/^src-git (telephony|video) /d' feeds.conf.default
+          # Telefonie- und Video-Feed weggelassen: liefern nichts fürs Image,
+          # rtpengine-kmod baut z. B. nicht mit Kernel 6.18
+          cat > feeds.conf <<EOF
+          src-git packages https://git.openwrt.org/feed/packages.git^${FEED_PACKAGES}
+          src-git luci https://git.openwrt.org/project/luci.git^${FEED_LUCI}
+          src-git routing https://git.openwrt.org/feed/routing.git^${FEED_ROUTING}
+          EOF
+          cat feeds.conf
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
@@ -88,16 +100,13 @@ jobs:
         run: |
           cd "$OPENWRT_PATH"
           cp "$GITHUB_WORKSPACE/config/brume3.config" .config
-          if [ "${{ inputs.all_kmods }}" != "false" ]; then
+          if [ "$ALL_KMODS" = "true" ]; then
             echo "CONFIG_ALL_KMODS=y" >> .config
           fi
           echo "CONFIG_BUILD_LOG=y" >> .config
           make defconfig
           # Sicherstellen, dass nichts Wichtiges stillschweigend weggefallen ist
-          for p in TARGET_mediatek_filogic_DEVICE_glinet_gl-mt5000 \
-                   PACKAGE_luci PACKAGE_luci-proto-wireguard PACKAGE_luci-app-ddns \
-                   PACKAGE_kmod-sched-cake PACKAGE_luci-app-sqm \
-                   PACKAGE_nlbwmon PACKAGE_uhttpd-mod-ubus PACKAGE_mosquitto-client-nossl; do
+          for p in TARGET_mediatek_filogic_DEVICE_glinet_gl-mt5000 PACKAGE_luci; do
             grep -q "^CONFIG_${p}=y" .config || { echo "FEHLER: $p fehlt nach defconfig"; exit 1; }
           done
           echo "Konfiguration OK"
@@ -173,14 +182,15 @@ jobs:
 
       - name: Release anlegen
         if: success()
-        uses: softprops/action-gh-release@v2
+        # softprops/action-gh-release v2, auf Commit festgenagelt
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: ${{ env.TAG }}
           name: ${{ env.TAG }} (Quelle ${{ env.SRC_REV }})
           prerelease: true
           body: |
-            OpenWrt für GL.iNet GL-MT5000 (Brume 3)
-            Quelle: GLiNet-Tech/openwrt @ ${{ env.SRC_REV }} (OpenWrt main + PR #24237)
-            Zusatz: copy_config-Fix (Einstellungen behalten beim Sysupgrade), Switch-Reset-Pin-Prüfung (GPIO 48)
-            Alle kmods: ${{ inputs.all_kmods || 'true' }}
+            OpenWrt für GL.iNet GL-MT5000 (Brume 3), Standard-Paketauswahl (nur LuCI zusätzlich)
+            Quelle: GLiNet-Tech/openwrt @ ${{ env.SRC_REV }} (OpenWrt main + PR #24237, keine eigenen Änderungen)
+            Feeds: packages ${{ env.FEED_PACKAGES }}, luci ${{ env.FEED_LUCI }}, routing ${{ env.FEED_ROUTING }}
+            Alle kmods: ${{ env.ALL_KMODS }}
           files: out/*
