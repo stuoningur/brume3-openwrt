@@ -1,0 +1,270 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: stuoningur <50464069+stuoningur@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 09:00:34 +0100
+Subject: [PATCH 2/4] generic: mtk_eth_soc: enable the special tag only for the
+ MTK tagger
+
+Split the TX_DMA_SPTAG_V3 / MTK_GDMA_SPECIAL_TAG gating out of 795-11
+into its own patch (795-12) and use the existing mtk_uses_dsa() helper
+instead of open-coding the tag protocol check. mtk_uses_dsa() is moved
+up so the TX descriptor path can use it.
+
+This affects every MediaTek board with a non-MTK DSA tagger (MT7622 and
+MT7981 boards with RTL8365MB, SmartRG SDG-9000 with MxL86282), see the
+patch description.
+
+Drop the "no logic changes" note from 795-11 and refresh 730, 739,
+797-01, 750 and 751.
+---
+ ..._eth_soc-add-hw-dump-for-forced-rese.patch |  4 +-
+ ...h_soc-fix-offload-with-incompatible-.patch |  4 +-
+ ...1-net-mediatek-rtl8366ub-ppe-offload.patch | 35 +-------
+ ...h_soc-enable-the-special-tag-only-fo.patch | 87 +++++++++++++++++++
+ ..._eth_soc-query-the-wireless-driver-f.patch |  2 +-
+ ...ernet-mtk_eth_soc-add-mt7987-support.patch |  6 +-
+ ...se-hardware-configuration-for-mt7987.patch |  2 +-
+ 7 files changed, 98 insertions(+), 42 deletions(-)
+ create mode 100644 target/linux/generic/pending-6.18/795-12-net-ethernet-mtk_eth_soc-enable-the-special-tag-only-fo.patch
+
+diff --git a/target/linux/generic/hack-6.18/730-net-ethernet-mtk_eth_soc-add-hw-dump-for-forced-rese.patch b/target/linux/generic/hack-6.18/730-net-ethernet-mtk_eth_soc-add-hw-dump-for-forced-rese.patch
+index 061a4a9c3c..6fb10b9e14 100644
+--- a/target/linux/generic/hack-6.18/730-net-ethernet-mtk_eth_soc-add-hw-dump-for-forced-rese.patch
++++ b/target/linux/generic/hack-6.18/730-net-ethernet-mtk_eth_soc-add-hw-dump-for-forced-rese.patch
+@@ -37,7 +37,7 @@ Signed-off-by: Bo-Cun Chen <bc-bocun.chen@mediatek.com>
+  		.glo_cfg	= 0x4604,
+  		.rst_idx	= 0x4608,
+  		.delay_irq	= 0x460c,
+-@@ -4217,6 +4220,56 @@ static void mtk_set_mcr_max_rx(struct mt
++@@ -4215,6 +4218,56 @@ static void mtk_set_mcr_max_rx(struct mt
+  		mtk_w32(mac->hw, mcr_new, MTK_MAC_MCR(mac->id));
+  }
+  
+@@ -94,7 +94,7 @@ Signed-off-by: Bo-Cun Chen <bc-bocun.chen@mediatek.com>
+  static void mtk_hw_reset(struct mtk_eth *eth)
+  {
+  	u32 val;
+-@@ -4701,6 +4754,8 @@ static void mtk_pending_work(struct work
++@@ -4699,6 +4752,8 @@ static void mtk_pending_work(struct work
+  	rtnl_lock();
+  	set_bit(MTK_RESETTING, &eth->state);
+  
+diff --git a/target/linux/generic/hack-6.18/739-net-ethernet-mtk_eth_soc-fix-offload-with-incompatible-.patch b/target/linux/generic/hack-6.18/739-net-ethernet-mtk_eth_soc-fix-offload-with-incompatible-.patch
+index ee042ca19b..b242a81b80 100644
+--- a/target/linux/generic/hack-6.18/739-net-ethernet-mtk_eth_soc-fix-offload-with-incompatible-.patch
++++ b/target/linux/generic/hack-6.18/739-net-ethernet-mtk_eth_soc-fix-offload-with-incompatible-.patch
+@@ -41,7 +41,7 @@ Signed-off-by: Mieczyslaw Nalewaj <namiltd@yahoo.com>
+ 
+ --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+ +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+-@@ -5120,6 +5120,35 @@ static u16 mtk_select_queue(struct net_d
++@@ -5118,6 +5118,35 @@ static u16 mtk_select_queue(struct net_d
+  	return queue;
+  }
+  
+@@ -77,7 +77,7 @@ Signed-off-by: Mieczyslaw Nalewaj <namiltd@yahoo.com>
+  static const struct ethtool_ops mtk_ethtool_ops = {
+  	.get_link_ksettings	= mtk_get_link_ksettings,
+  	.set_link_ksettings	= mtk_set_link_ksettings,
+-@@ -5159,6 +5188,9 @@ static const struct net_device_ops mtk_n
++@@ -5157,6 +5186,9 @@ static const struct net_device_ops mtk_n
+  	.ndo_bpf		= mtk_xdp,
+  	.ndo_xdp_xmit		= mtk_xdp_xmit,
+  	.ndo_select_queue	= mtk_select_queue,
+diff --git a/target/linux/generic/pending-6.18/795-11-net-mediatek-rtl8366ub-ppe-offload.patch b/target/linux/generic/pending-6.18/795-11-net-mediatek-rtl8366ub-ppe-offload.patch
+index 08531e1f63..c4c6a3cf67 100644
+--- a/target/linux/generic/pending-6.18/795-11-net-mediatek-rtl8366ub-ppe-offload.patch
++++ b/target/linux/generic/pending-6.18/795-11-net-mediatek-rtl8366ub-ppe-offload.patch
+@@ -10,41 +10,10 @@ VLAN-aware forwarding. Reject unsupported VLAN-aware encapsulations.
+ Preserve the bridge-resolved business VLAN in flowtable paths,
+ including untagged user-port egress and routing through a bridge PVID.
+ 
+-Apply after the RTL8366UB switch and tagger patch. This consolidates
+-the Ethernet, PPE and flowtable portions of the MT5000 patch series
+-with kernel-style whitespace formatting and no logic changes.
++Apply after the RTL8366UB switch and tagger patch. The MediaTek
++special tag gating for non-MTK taggers is a separate patch.
+ 
+ ---
+---- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+-+++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+-@@ -1582,7 +1582,8 @@ static void mtk_tx_set_dma_desc_v2(struc
+- 		/* tx checksum offload */
+- 		if (info->csum)
+- 			data |= TX_DMA_CHKSUM_V2;
+--		if (mtk_is_netsys_v3_or_greater(eth) && netdev_uses_dsa(dev))
+-+		if (mtk_is_netsys_v3_or_greater(eth) && netdev_uses_dsa(dev) &&
+-+		    dev->dsa_ptr->tag_ops->proto == DSA_TAG_PROTO_MTK)
+- 			data |= TX_DMA_SPTAG_V3;
+- 	}
+- 	WRITE_ONCE(desc->txd5, data);
+-@@ -3749,14 +3750,15 @@ static void mtk_gdm_config(struct mtk_et
+- 	val = mtk_r32(eth, MTK_GDMA_FWD_CFG(id));
+- 
+- 	/* default setup the forward port to send frame to PDMA */
+--	val &= ~0xffff;
+-+	val &= ~(0xffff | MTK_GDMA_SPECIAL_TAG);
+- 
+- 	/* Enable RX checksum */
+- 	val |= MTK_GDMA_ICS_EN | MTK_GDMA_TCS_EN | MTK_GDMA_UCS_EN;
+- 
+- 	val |= config;
+- 
+--	if (eth->netdev[id] && netdev_uses_dsa(eth->netdev[id]))
+-+	if (eth->netdev[id] && netdev_uses_dsa(eth->netdev[id]) &&
+-+	    eth->netdev[id]->dsa_ptr->tag_ops->proto == DSA_TAG_PROTO_MTK)
+- 		val |= MTK_GDMA_SPECIAL_TAG;
+- 
+- 	mtk_w32(eth, val, MTK_GDMA_FWD_CFG(id));
+ --- a/drivers/net/ethernet/mediatek/mtk_ppe_offload.c
+ +++ b/drivers/net/ethernet/mediatek/mtk_ppe_offload.c
+ @@ -172,25 +172,23 @@ mtk_flow_mangle_ipv4(const struct flow_a
+diff --git a/target/linux/generic/pending-6.18/795-12-net-ethernet-mtk_eth_soc-enable-the-special-tag-only-fo.patch b/target/linux/generic/pending-6.18/795-12-net-ethernet-mtk_eth_soc-enable-the-special-tag-only-fo.patch
+new file mode 100644
+index 0000000000..dec8df5f25
+--- /dev/null
++++ b/target/linux/generic/pending-6.18/795-12-net-ethernet-mtk_eth_soc-enable-the-special-tag-only-fo.patch
+@@ -0,0 +1,87 @@
++From: stuoningur <50464069+stuoningur@users.noreply.github.com>
++Subject: [PATCH] net: ethernet: mtk_eth_soc: enable the special tag only for the MTK tagger
++
++TX_DMA_SPTAG_V3 and MTK_GDMA_SPECIAL_TAG make the frame engine insert
++and parse the MediaTek special tag. They are currently set whenever
++the netdev is a DSA conduit, regardless of the tagging protocol, and
++MTK_GDMA_SPECIAL_TAG is never cleared once set.
++
++Only DSA_TAG_PROTO_MTK uses that tag format. The RTL8366UB 802.1Q
++tagger carries the port information in a regular 802.1Q tag and needs
++both bits off. Use the existing mtk_uses_dsa() helper, which already
++performs this check (and compiles without CONFIG_NET_DSA), and clear
++MTK_GDMA_SPECIAL_TAG before it is conditionally set again. Move
++mtk_uses_dsa() up so the TX descriptor path can use it.
++
++This changes behaviour for every MediaTek board whose switch uses a
++non-MTK tagger, not only the GL-MT5000:
++ - MT7622 + RTL8365MB (Buffalo WSR-2533DHP2, Elecom WRC-2533GENT,
++   TOTOLINK A8000RU): GDMA special tag off
++ - MT7981 + RTL8365MB (Mercusys MR85x): GDMA special tag off
++ - MT7988 + MxL86282 with mxl862xx-8021q (SmartRG SDG-9000): GDMA
++   special tag and TX SPTAG_V3 off
++These boards need a Tested-by before this is merged.
++
++Split out of the RTL8366UB PPE offload patch as requested in review.
++---
++--- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+++++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
++@@ -1540,6 +1540,16 @@ static void mtk_tx_set_dma_desc_v1(struc
++ 	WRITE_ONCE(desc->txd4, data);
++ }
++ 
+++static bool mtk_uses_dsa(struct net_device *dev)
+++{
+++#if IS_ENABLED(CONFIG_NET_DSA)
+++	return netdev_uses_dsa(dev) &&
+++	       dev->dsa_ptr->tag_ops->proto == DSA_TAG_PROTO_MTK;
+++#else
+++	return false;
+++#endif
+++}
+++
++ static void mtk_tx_set_dma_desc_v2(struct net_device *dev, void *txd,
++ 				   struct mtk_tx_dma_desc_info *info)
++ {
++@@ -1582,7 +1592,7 @@ static void mtk_tx_set_dma_desc_v2(struc
++ 		/* tx checksum offload */
++ 		if (info->csum)
++ 			data |= TX_DMA_CHKSUM_V2;
++-		if (mtk_is_netsys_v3_or_greater(eth) && netdev_uses_dsa(dev))
+++		if (mtk_is_netsys_v3_or_greater(eth) && mtk_uses_dsa(dev))
++ 			data |= TX_DMA_SPTAG_V3;
++ 	}
++ 	WRITE_ONCE(desc->txd5, data);
++@@ -3749,30 +3759,20 @@ static void mtk_gdm_config(struct mtk_et
++ 	val = mtk_r32(eth, MTK_GDMA_FWD_CFG(id));
++ 
++ 	/* default setup the forward port to send frame to PDMA */
++-	val &= ~0xffff;
+++	val &= ~(0xffff | MTK_GDMA_SPECIAL_TAG);
++ 
++ 	/* Enable RX checksum */
++ 	val |= MTK_GDMA_ICS_EN | MTK_GDMA_TCS_EN | MTK_GDMA_UCS_EN;
++ 
++ 	val |= config;
++ 
++-	if (eth->netdev[id] && netdev_uses_dsa(eth->netdev[id]))
+++	if (eth->netdev[id] && mtk_uses_dsa(eth->netdev[id]))
++ 		val |= MTK_GDMA_SPECIAL_TAG;
++ 
++ 	mtk_w32(eth, val, MTK_GDMA_FWD_CFG(id));
++ }
++ 
++ 
++-static bool mtk_uses_dsa(struct net_device *dev)
++-{
++-#if IS_ENABLED(CONFIG_NET_DSA)
++-	return netdev_uses_dsa(dev) &&
++-	       dev->dsa_ptr->tag_ops->proto == DSA_TAG_PROTO_MTK;
++-#else
++-	return false;
++-#endif
++-}
++-
++ /*
++  * Recompute the per-conduit DSA user-port queue map.  Each conduit's mac
++  * gets a queue base (queues 0..MTK_MAX_DEVS-1 are reserved for non-DSA
+diff --git a/target/linux/generic/pending-6.18/797-01-net-ethernet-mtk_eth_soc-query-the-wireless-driver-f.patch b/target/linux/generic/pending-6.18/797-01-net-ethernet-mtk_eth_soc-query-the-wireless-driver-f.patch
+index 252fac796d..1be55ea217 100644
+--- a/target/linux/generic/pending-6.18/797-01-net-ethernet-mtk_eth_soc-query-the-wireless-driver-f.patch
++++ b/target/linux/generic/pending-6.18/797-01-net-ethernet-mtk_eth_soc-query-the-wireless-driver-f.patch
+@@ -814,7 +814,7 @@ Signed-off-by: Felix Fietkau <nbd@nbd.name>
+  #endif
+ --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+ +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+-@@ -2604,7 +2604,7 @@ static int mtk_poll_rx(struct napi_struc
++@@ -2613,7 +2613,7 @@ static int mtk_poll_rx(struct napi_struc
+  		}
+  
+  		if (reason == MTK_PPE_CPU_REASON_HIT_UNBIND_RATE_REACHED)
+diff --git a/target/linux/mediatek/patches-6.18/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch b/target/linux/mediatek/patches-6.18/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch
+index c56070ff6c..cc1b8068a7 100644
+--- a/target/linux/mediatek/patches-6.18/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch
++++ b/target/linux/mediatek/patches-6.18/750-net-ethernet-mtk_eth_soc-add-mt7987-support.patch
+@@ -106,7 +106,7 @@ Signed-off-by: Bo-Cun Chen <bc-bocun.chen@mediatek.com>
+  	mdelay(20);
+  	mtk_m32(mac->hw, XMAC_GLB_CNTCLR, XMAC_GLB_CNTCLR,
+  		MTK_XMAC_CNT_CTRL(mac->id));
+-@@ -2965,10 +2995,16 @@ static int mtk_tx_alloc(struct mtk_eth *
++@@ -2974,10 +3004,16 @@ static int mtk_tx_alloc(struct mtk_eth *
+  			mtk_w32(eth, val, soc->reg_map->qdma.qtx_cfg + ofs);
+  
+  			val = MTK_QTX_SCH_MIN_RATE_EN |
+@@ -126,7 +126,7 @@ Signed-off-by: Bo-Cun Chen <bc-bocun.chen@mediatek.com>
+  			if (mtk_is_netsys_v1(eth))
+  				val |= MTK_QTX_SCH_LEAKY_BUCKET_EN;
+  			mtk_w32(eth, val, soc->reg_map->qdma.qtx_sch + ofs);
+-@@ -6118,6 +6154,37 @@ static const struct mtk_soc_data mt7986_
++@@ -6116,6 +6152,37 @@ static const struct mtk_soc_data mt7986_
+  	},
+  };
+  
+@@ -164,7 +164,7 @@ Signed-off-by: Bo-Cun Chen <bc-bocun.chen@mediatek.com>
+  static const struct mtk_soc_data mt7988_data = {
+  	.reg_map = &mt7988_reg_map,
+  	.ana_rgc3 = 0x128,
+-@@ -6180,6 +6247,7 @@ const struct of_device_id of_mtk_match[]
++@@ -6178,6 +6245,7 @@ const struct of_device_id of_mtk_match[]
+  	{ .compatible = "mediatek,mt7629-eth", .data = &mt7629_data },
+  	{ .compatible = "mediatek,mt7981-eth", .data = &mt7981_data },
+  	{ .compatible = "mediatek,mt7986-eth", .data = &mt7986_data },
+diff --git a/target/linux/mediatek/patches-6.18/751-net-ethernet-mtk_eth_soc-revise-hardware-configuration-for-mt7987.patch b/target/linux/mediatek/patches-6.18/751-net-ethernet-mtk_eth_soc-revise-hardware-configuration-for-mt7987.patch
+index 079ce557fa..22c8bc3efa 100644
+--- a/target/linux/mediatek/patches-6.18/751-net-ethernet-mtk_eth_soc-revise-hardware-configuration-for-mt7987.patch
++++ b/target/linux/mediatek/patches-6.18/751-net-ethernet-mtk_eth_soc-revise-hardware-configuration-for-mt7987.patch
+@@ -15,7 +15,7 @@ Signed-off-by: Bo-Cun Chen <bc-bocun.chen@mediatek.com>
+ 
+ --- a/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+ +++ b/drivers/net/ethernet/mediatek/mtk_eth_soc.c
+-@@ -4609,27 +4609,40 @@ static int mtk_hw_init(struct mtk_eth *e
++@@ -4607,27 +4607,40 @@ static int mtk_hw_init(struct mtk_eth *e
+  		mtk_w32(eth, PSE_DUMMY_WORK_GDM(1) | PSE_DUMMY_WORK_GDM(2) |
+  			PSE_DUMMY_WORK_GDM(3) | DUMMY_PAGE_THR, PSE_DUMY_REQ);
+  

@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: stuoningur <50464069+stuoningur@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 09:00:34 +0100
+Subject: [PATCH 3/4] generic: tag_rtl8366ub_8021q: reset MAC header after the
+ trap strip
+
+Add 795-13: after rtl8366ub_8021q_control_rcv() strips the RTL8_4
+header, skb->mac_header still points at the old frame start, so
+eth_hdr()->h_proto reads part of the destination MAC and an in-band
+802.1Q tag on a trapped frame is missed. Reset the MAC header after
+the strip, as tag_sja1105.c does.
+---
+ ...366ub_8021q-reset-MAC-header-after-s.patch | 33 +++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+ create mode 100644 target/linux/generic/pending-6.18/795-13-net-dsa-tag_rtl8366ub_8021q-reset-MAC-header-after-s.patch
+
+diff --git a/target/linux/generic/pending-6.18/795-13-net-dsa-tag_rtl8366ub_8021q-reset-MAC-header-after-s.patch b/target/linux/generic/pending-6.18/795-13-net-dsa-tag_rtl8366ub_8021q-reset-MAC-header-after-s.patch
+new file mode 100644
+index 0000000000..e3838dad57
+--- /dev/null
++++ b/target/linux/generic/pending-6.18/795-13-net-dsa-tag_rtl8366ub_8021q-reset-MAC-header-after-s.patch
+@@ -0,0 +1,33 @@
++From: stuoningur <50464069+stuoningur@users.noreply.github.com>
++Subject: [PATCH] net: dsa: tag_rtl8366ub_8021q: reset MAC header after stripping the trap header
++
++rtl8366ub_8021q_control_rcv() strips the RTL8_4 header with
++dsa_strip_etype_header(), which moves the MAC addresses forward over
++it. skb->mac_header still points at the old frame start until
++dsa_switch_rcv() resets it after ->rcv() returns, so the following
++eth_hdr(skb)->h_proto check reads bytes 4-5 of the destination MAC.
++
++An 802.1Q tag on a trapped frame sits behind the RTL8_4 header, so the
++conduit cannot strip it into vlan_tci and this in-band check is the
++only place it is seen. A trapped frame on a management VID is thus not
++passed to dsa_8021q_rcv() and reaches the bridge still tagged.
++
++Update the MAC header right after the strip, as tag_sja1105.c does for
++the same native-header-plus-tag_8021q layout.
++
++Reported-by: dmtpascoal (https://github.com/openwrt/openwrt/pull/24237)
++---
++--- a/net/dsa/tag_rtl8366ub_8021q.c
+++++ b/net/dsa/tag_rtl8366ub_8021q.c
++@@ -215,6 +215,11 @@ static struct sk_buff *rtl8366ub_8021q_r
++ 		src_port = rtl8366ub_8021q_control_rcv(skb);
++ 		if (src_port < 0)
++ 			return NULL;
+++		/* The RTL8_4 header strip moved the MAC addresses forward.
+++		 * Update the MAC header so eth_hdr() sees the frame's real
+++		 * EtherType and an in-band 802.1Q tag is found below.
+++		 */
+++		skb_set_mac_header(skb, -ETH_HLEN);
++ 		switch_id = netdev->dsa_ptr->ds->index;
++ 		trapped = true;
++ 	}

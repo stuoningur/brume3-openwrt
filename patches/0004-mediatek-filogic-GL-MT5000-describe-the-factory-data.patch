@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: stuoningur <50464069+stuoningur@users.noreply.github.com>
+Date: Tue, 3 Nov 2026 09:00:52 +0100
+Subject: [PATCH 4/4] mediatek: filogic: GL-MT5000: describe the factory data
+ cells
+
+Add the ddns, sn-bak, sn and country-code cells to the factory
+nvmem-layout, matching GL's stock device tree and the GL-MT2500.
+Node names use the absolute offsets so they match reg.
+
+Suggested-by: Kyklas, dmtpascoal (https://github.com/openwrt/openwrt/pull/24237)
+---
+ .../mediatek/dts/mt7987a-glinet-gl-mt5000.dts    | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/target/linux/mediatek/dts/mt7987a-glinet-gl-mt5000.dts b/target/linux/mediatek/dts/mt7987a-glinet-gl-mt5000.dts
+index fc3cb6bd05..7d0efc5a44 100644
+--- a/target/linux/mediatek/dts/mt7987a-glinet-gl-mt5000.dts
++++ b/target/linux/mediatek/dts/mt7987a-glinet-gl-mt5000.dts
+@@ -136,6 +136,22 @@
+ 							reg = <0x4000 0x6>;
+ 							#nvmem-cell-cells = <1>;
+ 						};
++
++						ddns@4010 {
++							reg = <0x4010 0x10>;
++						};
++
++						sn-bak@4020 {
++							reg = <0x4020 0x10>;
++						};
++
++						sn@4030 {
++							reg = <0x4030 0x10>;
++						};
++
++						country-code@4088 {
++							reg = <0x4088 0x10>;
++						};
+ 					};
+ 
+ 				};
